@@ -1,0 +1,33 @@
+# OS
+.DS_Store
+
+# Python
+venv/
+.env
+*.pyc
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+
+# FastAPI/SQLite
+backend/thequeue.db
+*.sqlite3
+
+# Node/Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+frontend/.env
+.vite/
+frontend/.vite/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build artifacts
+coverage/

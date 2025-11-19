@@ -11,3 +11,17 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   return res.json();
 }
+
+export async function updateRequestStatus(id: number, status: 'pending' | 'accepted' | 'playing' | 'done' | 'rejected') {
+  return api(`/requests/${id}/status`, {
+    method: 'PATCH',
+    body: JSON.stringify({ status }),
+  });
+}
+
+export async function updateRequestPosition(id: number, position: number) {
+  return api(`/requests/${id}/position`, {
+    method: 'PATCH',
+    body: JSON.stringify({ position }),
+  });
+}

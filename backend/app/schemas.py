@@ -42,3 +42,11 @@ class RequestOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class RequestStatusUpdate(BaseModel):
+    status: RequestStatus
+
+
+class RequestPositionUpdate(BaseModel):
+    position: int

@@ -66,50 +66,84 @@ export default function Audience() {
     }
   }
 
-  if (loading) return <div style={{ padding: 24, fontFamily: 'system-ui, Arial' }}>Loading…</div>
-  if (error) return <div style={{ padding: 24, fontFamily: 'system-ui, Arial', color: 'crimson' }}>{error}</div>
-  if (!session) return <div style={{ padding: 24, fontFamily: 'system-ui, Arial' }}>Session not found</div>
+  if (loading) return <div className="p-6">Loading…</div>
+  if (error) return <div className="p-6 text-red-500">{error}</div>
+  if (!session) return <div className="p-6">Session not found</div>
+
+  const nowPlaying = requests.find(r => r.status === 'playing') || null
+  const nextUp = requests.filter(r => r.status === 'accepted').slice(0, 3)
 
   return (
-    <div style={{ maxWidth: 720, margin: '2rem auto', fontFamily: 'system-ui, Arial' }}>
-      <h1>{session.name}</h1>
-      <p>Submit a song request</p>
-      <form onSubmit={onSubmit} style={{ display: 'grid', gap: 8 }}>
-        <label>
+    <div className="max-w-2xl mx-auto p-6">
+      <h1 className="text-2xl font-bold mb-2">{session.name}</h1>
+      <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">Submit a song request</p>
+
+      <form onSubmit={onSubmit} className="grid gap-3 rounded-lg border border-gray-200 dark:border-gray-800 p-4 bg-white/70 dark:bg-gray-900/40">
+        <label className="text-sm">
           Song title (required)
-          <input value={songTitle} onChange={(e) => setSongTitle(e.target.value)} required style={{ width: '100%', padding: 8 }} />
+          <input value={songTitle} onChange={(e) => setSongTitle(e.target.value)} required className="mt-1 w-full rounded-md border border-gray-300 bg-white/80 p-2 text-gray-900 dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700" />
         </label>
-        <label>
+        <label className="text-sm">
           Artist (optional)
-          <input value={artist} onChange={(e) => setArtist(e.target.value)} style={{ width: '100%', padding: 8 }} />
+          <input value={artist} onChange={(e) => setArtist(e.target.value)} className="mt-1 w-full rounded-md border border-gray-300 bg-white/80 p-2 text-gray-900 dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700" />
         </label>
-        <label>
+        <label className="text-sm">
           Your name (optional)
-          <input value={guestName} onChange={(e) => setGuestName(e.target.value)} style={{ width: '100%', padding: 8 }} />
+          <input value={guestName} onChange={(e) => setGuestName(e.target.value)} className="mt-1 w-full rounded-md border border-gray-300 bg-white/80 p-2 text-gray-900 dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700" />
         </label>
-        <label>
+        <label className="text-sm">
           Note (optional)
-          <input value={note} onChange={(e) => setNote(e.target.value)} style={{ width: '100%', padding: 8 }} />
+          <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full rounded-md border border-gray-300 bg-white/80 p-2 text-gray-900 dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700" />
         </label>
-        <button type="submit" disabled={submitting || !songTitle}>
+        <button type="submit" disabled={submitting || !songTitle} className="mt-1 inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-white disabled:opacity-50">
           {submitting ? 'Submitting…' : 'Submit'}
         </button>
       </form>
-      {success && <p style={{ color: 'green' }}>{success}</p>}
-      {error && <p style={{ color: 'crimson' }}>{error}</p>}
+      {success && <p className="text-green-600 mt-2 text-sm">{success}</p>}
+      {error && <p className="text-red-500 mt-2 text-sm">{error}</p>}
 
-      <h2 style={{ marginTop: 24 }}>Queue</h2>
-      <ul>
-        {requests.length === 0 && <li>No requests yet.</li>}
-        {requests.slice(0, 10).map((r) => (
-          <li key={r.id} style={{ padding: 8, borderBottom: '1px solid #ddd' }}>
+      <section className="grid gap-4 md:grid-cols-2 mt-6">
+        <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-4 bg-white/70 dark:bg-gray-900/40">
+          <h3 className="text-lg font-semibold mb-2">Now Playing</h3>
+          {nowPlaying ? (
             <div>
-              <strong>{r.song_title}</strong>{r.artist ? ` – ${r.artist}` : ''}
+              <div className="font-medium">{nowPlaying.song_title}{nowPlaying.artist ? <span className="text-gray-500"> — {nowPlaying.artist}</span> : ''}</div>
+              <div className="text-xs text-gray-500 mt-1">Requested by: {nowPlaying.guest_name || 'Anonymous'}</div>
+              {nowPlaying.note && <div className="text-sm mt-1">Note: {nowPlaying.note}</div>}
             </div>
-            <div style={{ fontSize: 12, color: '#555' }}>
-              Status: {r.status} | Pos: {r.position}
+          ) : (
+            <div className="text-sm text-gray-500">No song is currently playing.</div>
+          )}
+        </div>
+        <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-4 bg-white/70 dark:bg-gray-900/40">
+          <h3 className="text-lg font-semibold mb-2">Next Up</h3>
+          {nextUp.length === 0 ? (
+            <div className="text-sm text-gray-500">No upcoming songs.</div>
+          ) : (
+            <ol className="list-decimal pl-5 space-y-2">
+              {nextUp.map(r => (
+                <li key={r.id}>
+                  <span className="font-medium">{r.song_title}</span>{r.artist ? <span className="text-gray-500"> — {r.artist}</span> : ''}
+                  <span className="text-xs text-gray-500"> · By: {r.guest_name || 'Anonymous'}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      </section>
+
+      <h2 className="text-xl font-semibold mt-6">Queue</h2>
+      <ul className="divide-y divide-gray-200 dark:divide-gray-800 rounded-md bg-white/60 dark:bg-gray-900/40">
+        {requests.length === 0 && <li className="p-4 text-sm text-gray-500">No requests yet.</li>}
+        {requests.slice(0, 10).map((r) => (
+          <li key={r.id} className="p-4">
+            <div className="font-medium">
+              {r.song_title}{r.artist ? <span className="text-gray-500"> — {r.artist}</span> : ''}
             </div>
-            {r.note && <div style={{ fontSize: 12 }}>Note: {r.note}</div>}
+            <div className="text-xs text-gray-500 mt-1">
+              Status: {r.status} · Pos: {r.position}
+            </div>
+            {r.note && <div className="text-sm mt-1">Note: {r.note}</div>}
           </li>
         ))}
       </ul>

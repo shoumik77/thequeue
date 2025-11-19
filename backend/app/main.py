@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from . import models, schemas
@@ -6,6 +6,8 @@ from .database import Base, engine, get_db
 from .utils import generate_slug
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+import asyncio
+import json
 
 Base.metadata.create_all(bind=engine)
 
@@ -28,6 +30,52 @@ app.add_middleware(
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# --- Realtime: simple per-session WS manager ---
+class ConnectionManager:
+    def __init__(self) -> None:
+        # session_id -> set[WebSocket]
+        self.rooms: dict[int, set[WebSocket]] = {}
+
+    async def connect(self, session_id: int, websocket: WebSocket):
+        await websocket.accept()
+        self.rooms.setdefault(session_id, set()).add(websocket)
+
+    def disconnect(self, session_id: int, websocket: WebSocket):
+        room = self.rooms.get(session_id)
+        if room and websocket in room:
+            room.remove(websocket)
+            if not room:
+                self.rooms.pop(session_id, None)
+
+    async def broadcast(self, session_id: int, message: dict):
+        room = self.rooms.get(session_id)
+        if not room:
+            return
+        data = json.dumps(message)
+        to_remove: list[WebSocket] = []
+        for ws in list(room):
+            try:
+                await ws.send_text(data)
+            except Exception:
+                to_remove.append(ws)
+        for ws in to_remove:
+            self.disconnect(session_id, ws)
+
+
+manager = ConnectionManager()
+
+
+@app.websocket("/ws/sessions/{session_id}")
+async def websocket_session(session_id: int, websocket: WebSocket):
+    await manager.connect(session_id, websocket)
+    try:
+        while True:
+            # We don't expect incoming messages now; keep alive by reading
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(session_id, websocket)
 
 # POST /sessions
 @app.post("/sessions", response_model=schemas.SessionOut)
@@ -68,6 +116,12 @@ def create_request(session_id: int, payload: schemas.RequestCreate, db: Session 
     db.add(req)
     db.commit()
     db.refresh(req)
+    # Broadcast new request
+    try:
+        data = schemas.RequestOut.model_validate(req).model_dump()
+        asyncio.create_task(manager.broadcast(session_id, {"type": "request:new", "data": data}))
+    except Exception:
+        pass
     return req
 
 # GET /sessions/{session_id}/requests
@@ -83,3 +137,43 @@ def list_requests(session_id: int, db: Session = Depends(get_db)):
     )
     rows = db.execute(stmt).scalars().all()
     return rows
+
+# PATCH /requests/{request_id}/status
+@app.patch("/requests/{request_id}/status", response_model=schemas.RequestOut)
+def update_request_status(request_id: int, payload: schemas.RequestStatusUpdate, db: Session = Depends(get_db)):
+    req = db.get(models.Request, request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    req.status = payload.status
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    return req
+
+# PATCH /requests/{request_id}/position
+@app.patch("/requests/{request_id}/position", response_model=schemas.RequestOut)
+def update_request_position(request_id: int, payload: schemas.RequestPositionUpdate, db: Session = Depends(get_db)):
+    req = db.get(models.Request, request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    session_id = req.session_id
+    # Load all requests in session ordered by current position
+    current = (
+        db.execute(
+            select(models.Request).where(models.Request.session_id == session_id).order_by(models.Request.position.asc(), models.Request.created_at.asc())
+        ).scalars().all()
+    )
+    # Clamp new position to [1, len]
+    n = len(current)
+    new_pos = max(1, min(payload.position, n))
+    # Rebuild order: remove req, insert at new_pos-1
+    others = [r for r in current if r.id != request_id]
+    insert_index = max(0, min(new_pos - 1, len(others)))
+    new_list = others[:insert_index] + [req] + others[insert_index:]
+    # Renumber sequentially starting at 1
+    for idx, r in enumerate(new_list, start=1):
+        r.position = idx
+        db.add(r)
+    db.commit()
+    db.refresh(req)
+    return req
