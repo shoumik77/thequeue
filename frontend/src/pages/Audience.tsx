@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { api } from '../api'
+import { api, wsUrlForSession } from '../api'
 import type { SessionOut, RequestOut } from '../types'
 
 export default function Audience() {
@@ -16,6 +16,7 @@ export default function Audience() {
   const [submitting, setSubmitting] = useState(false)
   const [success, setSuccess] = useState<string | null>(null)
   const [requests, setRequests] = useState<RequestOut[]>([])
+  const [wsConnected, setWsConnected] = useState(false)
 
   useEffect(() => {
     async function run() {
@@ -35,6 +36,31 @@ export default function Audience() {
     }
     run()
   }, [slug])
+
+  // WebSocket: subscribe to session updates and refresh on events
+  useEffect(() => {
+    if (!session) return
+    const url = wsUrlForSession(session.id)
+    const socket = new WebSocket(url)
+    socket.onopen = () => setWsConnected(true)
+    socket.onclose = () => setWsConnected(false)
+    socket.onerror = () => setWsConnected(false)
+    socket.onmessage = async (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (msg?.type === 'request:new' || msg?.type === 'request:update') {
+          const r = await api<RequestOut[]>(`/sessions/${session.id}/requests`)
+          setRequests(r)
+        }
+      } catch {
+        // ignore invalid events
+      }
+    }
+    return () => {
+      try { socket.close() } catch {}
+      setWsConnected(false)
+    }
+  }, [session?.id])
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -75,7 +101,10 @@ export default function Audience() {
 
   return (
     <div className="max-w-2xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-2">{session.name}</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold mb-2">{session.name}</h1>
+        <span className={`text-xs ${wsConnected ? 'text-green-600' : 'text-gray-400'}`}>{wsConnected ? 'live' : 'offline'}</span>
+      </div>
       <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">Submit a song request</p>
 
       <form onSubmit={onSubmit} className="grid gap-3 rounded-lg border border-gray-200 dark:border-gray-800 p-4 bg-white/70 dark:bg-gray-900/40">

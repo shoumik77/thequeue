@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, updateRequestStatus, updateRequestPosition } from '../api'
+import { api, updateRequestStatus, updateRequestPosition, wsUrlForSession } from '../api'
 import type { SessionOut, RequestOut } from '../types'
 import QRCode from 'qrcode.react'
 
@@ -10,6 +10,9 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'accepted' | 'playing' | 'done' | 'rejected'>('all')
+  const [wsConnected, setWsConnected] = useState(false)
+  const [ws, setWs] = useState<WebSocket | null>(null)
+  const [showQR, setShowQR] = useState(false)
 
   const audienceUrl = useMemo(() => {
     if (!session) return ''
@@ -54,11 +57,46 @@ export default function Dashboard() {
 
   // auto-poll every 5s when a session is active
   useEffect(() => {
-    if (!session) return
+    if (!session || wsConnected) return
     const id = setInterval(() => {
       loadRequests()
     }, 5000)
     return () => clearInterval(id)
+  }, [session?.id, wsConnected])
+
+  // WebSocket connection per session
+  useEffect(() => {
+    if (!session) return
+    const url = wsUrlForSession(session.id)
+    const socket = new WebSocket(url)
+    setWs(socket)
+    socket.onopen = async () => {
+      setWsConnected(true)
+      // sync once on connect
+      await loadRequests()
+    }
+    socket.onclose = () => setWsConnected(false)
+    socket.onerror = () => setWsConnected(false)
+    socket.onmessage = async (event) => {
+      try {
+        const msg = JSON.parse(event.data)
+        if (msg?.type === 'request:new' || msg?.type === 'request:update') {
+          await loadRequests()
+        }
+      } catch (_) {
+        // ignore parse errors
+      }
+    }
+    // simple keepalive ping every 25s
+    const pingId = setInterval(() => {
+      try { socket.readyState === WebSocket.OPEN && socket.send('ping') } catch {}
+    }, 25000)
+    return () => {
+      setWsConnected(false)
+      try { socket.close() } catch {}
+      setWs(null)
+      clearInterval(pingId)
+    }
   }, [session?.id])
 
   async function onSetStatus(id: number, status: RequestOut['status']) {
@@ -80,71 +118,57 @@ export default function Dashboard() {
 
   return (
     <div className="max-w-5xl mx-auto p-6">
-      <h1 className="text-3xl font-bold">DJ Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="heading">DJ Dashboard</h1>
+        <span className={wsConnected ? 'badge-live' : 'badge-off'}>{wsConnected ? 'live' : 'offline'}</span>
+      </div>
       {!session ? (
-        <div className="mt-4 space-y-3">
+        <div className="mt-5 panel space-y-4 max-w-2xl">
           <label className="block text-sm font-medium">
             Session name
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Friday Night – Club XYZ"
-              className="mt-2 w-full rounded-md border border-gray-300 bg-white/80 p-2 text-gray-900 dark:bg-gray-800 dark:text-gray-100 dark:border-gray-700"
+              className="mt-2 w-full rounded-md border border-white/10 bg-white/10 p-2 text-gray-100 placeholder:text-gray-400"
             />
           </label>
-          <button
-            onClick={createSession}
-            disabled={!name || loading}
-            className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
-          >
-            {loading ? 'Creating…' : 'Start New Session'}
-          </button>
-          {error && <p className="text-red-500">{error}</p>}
+          <div className="flex items-center gap-2">
+            <button onClick={createSession} disabled={!name || loading} className="btn-primary">
+              {loading ? 'Creating…' : 'Start New Session'}
+            </button>
+            {error && <p className="text-red-400 text-sm">{error}</p>}
+          </div>
         </div>
       ) : (
-        <div className="mt-4 space-y-4">
-          <div className="text-sm text-gray-600 dark:text-gray-300">
-            <span className="font-semibold">Session:</span> {session.name} (id: {session.id})
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            <span className="font-semibold">Audience link:</span>
-            <a className="text-blue-600 hover:underline" href={audienceUrl} target="_blank" rel="noreferrer">{audienceUrl}</a>
-            <button
-              onClick={() => navigator.clipboard.writeText(audienceUrl)}
-              className="rounded-md border border-gray-300 px-2 py-1 text-sm hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-800"
-            >
-              Copy
-            </button>
-          </div>
-          <div className="pt-2">
-            <div className="inline-block rounded-lg bg-white p-3 shadow dark:bg-gray-800">
-              <QRCode value={audienceUrl} size={128} includeMargin={true} />
+        <div className="mt-5 space-y-4">
+          <div className="panel space-y-2">
+            <div className="text-sm text-gray-300">
+              <span className="font-semibold">Session:</span> {session.name} <span className="opacity-60">(id: {session.id})</span>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <span className="font-semibold">Audience link:</span>
+              <a className="text-blue-400 hover:underline" href={audienceUrl} target="_blank" rel="noreferrer">{audienceUrl}</a>
+              <button onClick={() => navigator.clipboard.writeText(audienceUrl)} className="btn-ghost">Copy</button>
+              <button onClick={() => setShowQR(true)} className="btn-ghost">Show QR</button>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={loadRequests}
-              disabled={loading}
-              className="rounded-md bg-gray-200 px-3 py-1 text-sm hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
-            >
-              {loading ? 'Loading…' : 'Refresh Requests'}
+            <button onClick={loadRequests} disabled={loading} className="btn-ghost">
+              {loading ? 'Loading…' : 'Refresh'}
             </button>
-            {error && <p className="text-red-500 text-sm">{error}</p>}
+            {error && <p className="text-red-400 text-sm">{error}</p>}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="seg">
             {(['all','pending','accepted','playing','done','rejected'] as const).map((key) => (
-              <button
-                key={key}
-                onClick={() => setStatusFilter(key)}
-                className={`rounded-md border px-3 py-1 text-sm ${statusFilter === key ? 'bg-blue-600 text-white border-blue-600' : 'border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
-              >
+              <button key={key} onClick={() => setStatusFilter(key)} className={statusFilter === key ? 'active' : ''}>
                 {key}
               </button>
             ))}
           </div>
           {/* Now Playing & Next Up */}
           <section className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-4 bg-white/70 dark:bg-gray-900/40">
+            <div className="panel">
               <h3 className="text-lg font-semibold mb-2">Now Playing</h3>
               {(() => {
                 const np = requests.find(r => r.status === 'playing')
@@ -159,7 +183,7 @@ export default function Dashboard() {
                 )
               })()}
             </div>
-            <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-4 bg-white/70 dark:bg-gray-900/40">
+            <div className="panel">
               <h3 className="text-lg font-semibold mb-2">Next Up</h3>
               {(() => {
                 const list = requests.filter(r => r.status === 'accepted').slice(0, 3)
@@ -179,7 +203,7 @@ export default function Dashboard() {
           </section>
 
           <h2 className="text-xl font-semibold pt-4">Requests</h2>
-          <ul className="divide-y divide-gray-200 dark:divide-gray-800 rounded-md bg-white/60 dark:bg-gray-900/40">
+          <ul className="divide-y divide-white/10 glass">
             {(() => {
               const list = statusFilter === 'all' ? requests : requests.filter(r => r.status === statusFilter)
               if (list.length === 0) return <li className="p-4 text-sm text-gray-500">No requests yet.</li>
@@ -199,7 +223,7 @@ export default function Dashboard() {
                       await updateRequestPosition(r.id, newPos)
                       await loadRequests()
                     }}
-                    className="rounded-md border px-3 py-1 text-sm hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-800"
+                    className="btn-ghost"
                   >
                     ↑ Up
                   </button>
@@ -210,19 +234,33 @@ export default function Dashboard() {
                       await updateRequestPosition(r.id, newPos)
                       await loadRequests()
                     }}
-                    className="rounded-md border px-3 py-1 text-sm hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-800"
+                    className="btn-ghost"
                   >
                     ↓ Down
                   </button>
-                  <button onClick={() => onSetStatus(r.id, 'accepted')} className="rounded-md bg-amber-500/90 px-3 py-1 text-white hover:bg-amber-600">Accept</button>
-                  <button onClick={() => onSetStatus(r.id, 'playing')} className="rounded-md bg-green-600 px-3 py-1 text-white hover:bg-green-700">Playing</button>
-                  <button onClick={() => onSetStatus(r.id, 'done')} className="rounded-md bg-gray-700 px-3 py-1 text-white hover:bg-gray-800">Done</button>
-                  <button onClick={() => onSetStatus(r.id, 'rejected')} className="rounded-md bg-red-600 px-3 py-1 text-white hover:bg-red-700">Reject</button>
+                  <button onClick={() => onSetStatus(r.id, 'accepted')} className="btn bg-amber-500/90 text-white hover:bg-amber-600">Accept</button>
+                  <button onClick={() => onSetStatus(r.id, 'playing')} className="btn bg-green-600 text-white hover:bg-green-700">Playing</button>
+                  <button onClick={() => onSetStatus(r.id, 'done')} className="btn bg-gray-700 text-white hover:bg-gray-800">Done</button>
+                  <button onClick={() => onSetStatus(r.id, 'rejected')} className="btn bg-red-600 text-white hover:bg-red-700">Reject</button>
                 </div>
               </li>
               ))
             })()}
           </ul>
+          {showQR && (
+            <div className="fixed inset-0 z-50 grid place-items-center bg-black/60" onClick={() => setShowQR(false)}>
+              <div className="panel" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-lg font-semibold mb-3">Audience QR</h3>
+                <div className="flex items-center justify-center p-3 bg-white rounded-xl">
+                  <QRCode value={audienceUrl} size={220} includeMargin={true} />
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <button className="btn-primary" onClick={() => navigator.clipboard.writeText(audienceUrl)}>Copy Link</button>
+                  <button className="btn-ghost" onClick={() => setShowQR(false)}>Close</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

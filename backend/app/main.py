@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from . import models, schemas
@@ -6,7 +6,6 @@ from .database import Base, engine, get_db
 from .utils import generate_slug
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-import asyncio
 import json
 
 Base.metadata.create_all(bind=engine)
@@ -53,7 +52,7 @@ class ConnectionManager:
         room = self.rooms.get(session_id)
         if not room:
             return
-        data = json.dumps(message)
+        data = json.dumps(message, default=str)
         to_remove: list[WebSocket] = []
         for ws in list(room):
             try:
@@ -98,7 +97,7 @@ def get_session_by_slug(slug: str, db: Session = Depends(get_db)):
 
 # POST /sessions/{session_id}/requests
 @app.post("/sessions/{session_id}/requests", response_model=schemas.RequestOut)
-def create_request(session_id: int, payload: schemas.RequestCreate, db: Session = Depends(get_db)):
+def create_request(session_id: int, payload: schemas.RequestCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     sess = db.get(models.Session, session_id)
     if not sess or not sess.is_active:
         raise HTTPException(status_code=404, detail="Session not found or inactive")
@@ -116,12 +115,12 @@ def create_request(session_id: int, payload: schemas.RequestCreate, db: Session 
     db.add(req)
     db.commit()
     db.refresh(req)
-    # Broadcast new request
-    try:
-        data = schemas.RequestOut.model_validate(req).model_dump()
-        asyncio.create_task(manager.broadcast(session_id, {"type": "request:new", "data": data}))
-    except Exception:
-        pass
+    # Broadcast new request (wrap async in sync function for BackgroundTasks)
+    data = schemas.RequestOut.model_validate(req).model_dump()
+    def _broadcast_new():
+        import anyio
+        anyio.run(manager.broadcast, req.session_id, {"type": "request:new", "data": data})
+    background_tasks.add_task(_broadcast_new)
     return req
 
 # GET /sessions/{session_id}/requests
@@ -140,7 +139,7 @@ def list_requests(session_id: int, db: Session = Depends(get_db)):
 
 # PATCH /requests/{request_id}/status
 @app.patch("/requests/{request_id}/status", response_model=schemas.RequestOut)
-def update_request_status(request_id: int, payload: schemas.RequestStatusUpdate, db: Session = Depends(get_db)):
+def update_request_status(request_id: int, payload: schemas.RequestStatusUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     req = db.get(models.Request, request_id)
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
@@ -148,11 +147,17 @@ def update_request_status(request_id: int, payload: schemas.RequestStatusUpdate,
     db.add(req)
     db.commit()
     db.refresh(req)
+    # Broadcast update
+    data = schemas.RequestOut.model_validate(req).model_dump()
+    def _broadcast_update():
+        import anyio
+        anyio.run(manager.broadcast, req.session_id, {"type": "request:update", "data": data})
+    background_tasks.add_task(_broadcast_update)
     return req
 
 # PATCH /requests/{request_id}/position
 @app.patch("/requests/{request_id}/position", response_model=schemas.RequestOut)
-def update_request_position(request_id: int, payload: schemas.RequestPositionUpdate, db: Session = Depends(get_db)):
+def update_request_position(request_id: int, payload: schemas.RequestPositionUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     req = db.get(models.Request, request_id)
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")

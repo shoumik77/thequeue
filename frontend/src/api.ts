@@ -25,3 +25,9 @@ export async function updateRequestPosition(id: number, position: number) {
     body: JSON.stringify({ position }),
   });
 }
+
+export function wsUrlForSession(sessionId: number) {
+  const base = API_BASE.replace(/\/$/, '')
+  const wsBase = base.replace(/^http/, 'ws')
+  return `${wsBase}/ws/sessions/${sessionId}`
+}
