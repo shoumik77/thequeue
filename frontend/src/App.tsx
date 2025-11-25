@@ -10,6 +10,7 @@ export default function App() {
         </div>
         <nav className="flex items-center gap-2">
           <Link to="/dj" className="btn-ghost">DJ Dashboard</Link>
+          <Link to="/admin" className="btn-ghost">Admin</Link>
           <a href="https://github.com/shoumik77/thequeue" target="_blank" rel="noreferrer" className="btn-ghost">GitHub</a>
         </nav>
       </header>

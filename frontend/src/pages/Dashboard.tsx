@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, updateRequestStatus, updateRequestPosition, wsUrlForSession } from '../api'
 import type { SessionOut, RequestOut } from '../types'
 import QRCode from 'qrcode.react'
+import { DndContext, type DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { GripVertical, Play, Check, X } from 'lucide-react'
 
 export default function Dashboard() {
   const [name, setName] = useState('')
@@ -203,50 +207,85 @@ export default function Dashboard() {
           </section>
 
           <h2 className="text-xl font-semibold pt-4">Requests</h2>
-          <ul className="divide-y divide-white/10 glass">
-            {(() => {
-              const list = statusFilter === 'all' ? requests : requests.filter(r => r.status === statusFilter)
-              if (list.length === 0) return <li className="p-4 text-sm text-gray-500">No requests yet.</li>
-              return list.map((r) => (
-              <li key={r.id} className="p-4">
-                <div className="font-medium">
-                  {r.song_title}{r.artist ? <span className="text-gray-500"> — {r.artist}</span> : ''}
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  From: {r.guest_name || 'Anonymous'} · Status: {r.status} · Pos: {r.position}
-                </div>
-                {r.note && <div className="text-sm mt-1">Note: {r.note}</div>}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    onClick={async () => {
-                      const newPos = Math.max(1, r.position - 1)
-                      await updateRequestPosition(r.id, newPos)
-                      await loadRequests()
-                    }}
-                    className="btn-ghost"
-                  >
-                    ↑ Up
-                  </button>
-                  <button
-                    onClick={async () => {
-                      const maxPos = requests.length
-                      const newPos = Math.min(maxPos, r.position + 1)
-                      await updateRequestPosition(r.id, newPos)
-                      await loadRequests()
-                    }}
-                    className="btn-ghost"
-                  >
-                    ↓ Down
-                  </button>
-                  <button onClick={() => onSetStatus(r.id, 'accepted')} className="btn bg-amber-500/90 text-white hover:bg-amber-600">Accept</button>
-                  <button onClick={() => onSetStatus(r.id, 'playing')} className="btn bg-green-600 text-white hover:bg-green-700">Playing</button>
-                  <button onClick={() => onSetStatus(r.id, 'done')} className="btn bg-gray-700 text-white hover:bg-gray-800">Done</button>
-                  <button onClick={() => onSetStatus(r.id, 'rejected')} className="btn bg-red-600 text-white hover:bg-red-700">Reject</button>
-                </div>
-              </li>
-              ))
-            })()}
-          </ul>
+          {(() => {
+            const list = statusFilter === 'all' ? requests : requests.filter(r => r.status === statusFilter)
+            if (list.length === 0) return <ul className="divide-y divide-white/10 glass"><li className="p-4 text-sm text-gray-500">No requests yet.</li></ul>
+
+            // DnD only for accepted queue management
+            if (statusFilter === 'accepted') {
+              const ids = list.map((r) => r.id.toString())
+
+              function SortableRow({ r }: { r: RequestOut }) {
+                const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: r.id.toString() })
+                const style = { transform: CSS.Transform.toString(transform), transition }
+                return (
+                  <li ref={setNodeRef} style={style} className="p-4 flex flex-col">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="font-medium">
+                        {r.song_title}{r.artist ? <span className="text-gray-500"> — {r.artist}</span> : ''}
+                      </div>
+                      <button className="btn-ghost" {...attributes} {...listeners} title="Drag to reorder"><GripVertical size={16} /></button>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      From: {r.guest_name || 'Anonymous'} · Status: {r.status} · Pos: {r.position}
+                    </div>
+                    {r.note && <div className="text-sm mt-1">Note: {r.note}</div>}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button onClick={() => onSetStatus(r.id, 'playing')} className="btn bg-green-600 text-white hover:bg-green-700"><Play size={14} className="mr-1"/>Playing</button>
+                      <button onClick={() => onSetStatus(r.id, 'done')} className="btn bg-gray-700 text-white hover:bg-gray-800"><Check size={14} className="mr-1"/>Done</button>
+                      <button onClick={() => onSetStatus(r.id, 'rejected')} className="btn bg-red-600 text-white hover:bg-red-700"><X size={14} className="mr-1"/>Reject</button>
+                    </div>
+                  </li>
+                )
+              }
+
+              const handleDragEnd = async (event: DragEndEvent) => {
+                const { active, over } = event
+                if (!over || active.id === over.id) return
+                const draggedId = Number(active.id)
+                const overId = Number(over.id)
+                const target = list.find((r) => r.id === overId)
+                if (!target) return
+                await updateRequestPosition(draggedId, target.position)
+                await loadRequests()
+              }
+
+              return (
+                <DndContext onDragEnd={handleDragEnd}>
+                  <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+                    <ul className="divide-y divide-white/10 glass">
+                      {list.map((r) => (
+                        <SortableRow key={r.id} r={r} />
+                      ))}
+                    </ul>
+                  </SortableContext>
+                </DndContext>
+              )
+            }
+
+            // Non-accepted: render static list with actions
+            return (
+              <ul className="divide-y divide-white/10 glass">
+                {list.map((r) => (
+                  <li key={r.id} className="p-4">
+                    <div className="font-medium">
+                      {r.song_title}{r.artist ? <span className="text-gray-500"> — {r.artist}</span> : ''}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      From: {r.guest_name || 'Anonymous'} · Status: {r.status} · Pos: {r.position}
+                    </div>
+                    {r.note && <div className="text-sm mt-1">Note: {r.note}</div>}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button onClick={() => onSetStatus(r.id, 'accepted')} className="btn bg-amber-500/90 text-white hover:bg-amber-600">Accept</button>
+                      <button onClick={() => onSetStatus(r.id, 'playing')} className="btn bg-green-600 text-white hover:bg-green-700">Playing</button>
+                      <button onClick={() => onSetStatus(r.id, 'done')} className="btn bg-gray-700 text-white hover:bg-gray-800">Done</button>
+                      <button onClick={() => onSetStatus(r.id, 'rejected')} className="btn bg-red-600 text-white hover:bg-red-700">Reject</button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )
+          })()}
           {showQR && (
             <div className="fixed inset-0 z-50 grid place-items-center bg-black/60" onClick={() => setShowQR(false)}>
               <div className="panel" onClick={(e) => e.stopPropagation()}>

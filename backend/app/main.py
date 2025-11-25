@@ -1,16 +1,26 @@
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from . import models, schemas
+from . import models, schemas, admin
 from .database import Base, engine, get_db
 from .utils import generate_slug
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
+from typing import Optional
 import json
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="TheQueue API", version="0.1.0")
+
+# Include admin routes
+app.include_router(admin.router)
 
 # CORS - allow localhost dev
 app.add_middleware(
@@ -24,6 +34,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 @app.get("/health")
